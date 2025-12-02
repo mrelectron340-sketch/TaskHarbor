@@ -1,0 +1,531 @@
+TaskHarbor — Autonomous On-Chain Job Marketplace with Trustless Escrow & Auto-Pay
+
+Short pitch (1 line):
+A decentralized freelance jobs marketplace where payments live in autonomous smart contract escrows, work is submitted and DAO-voted, and payments are automatically released or refunded — all hosted on DeWeb and run by Massa Autonomous Smart Contracts (ASCs).
+
+What TaskHarbor does (TL;DR)
+
+Clients post jobs and fund them into an on-chain escrow.
+
+Freelancers accept jobs and submit work on-chain (or via CID).
+
+A DAO voting period or dispute period runs automatically. If majority accepts, ASC releases funds to freelancer; if rejected, ASC refunds the client or routes to arbitration.
+
+Everything runs without off-chain keepers: automated time windows, expiries, and payments are implemented with Massa Deferred Calls and ASC logic.
+
+Frontend is hosted on DeWeb (unstoppable), wallet connection via Bearby, UI shows job life cycle, receipts and audit trails on-chain.
+
+Roles & authentication
+
+Guest — can view job listings, creator profiles (public).
+
+Client — create jobs, fund escrow, open disputes, withdraw refunds. (Authenticated via Bearby wallet).
+
+Freelancer — accept jobs, submit deliverables, withdraw earned funds. (Authenticated via Bearby).
+
+DAO Member / Arbitrator — vote on disputes/approvals. Voting power can be based on token stake or governance token.
+
+Admin (optional) — only for admin UI off-chain (not required on chain). Judges prefer minimal privileged admin.
+
+Auth model: wallet-signature based. No email password onchain. Frontend checks role by on-chain state (e.g., mapping address→profile role flags).
+
+Main user journeys (short)
+
+Client creates job, sets funding, deadline, payment terms (fixed/partial/milestone). Client deposits funds into ASC escrow.
+
+Freelancer accepts job. ASC records acceptance and locks job state.
+
+Freelancer marks job complete + uploads CID (IPFS/Pinata) or encrypted CID.
+
+A DAO voting window (e.g., 3 days) automatically starts (ASC deferred call triggers voting period). DAO votes; if approved → ASC releases funds. If rejected or no votes → refund or arbitration flow.
+
+Any on-chain timeout triggers automatic fallback (e.g., if client inactive for X days, funds auto-release to freelancer). All timeouts are enforced by ASC via deferred calls.
+
+Pages, routes & access control (exact paths + who can access)
+
+I’ll list pages, their frontend route paths, and the route guard logic (pseudo):
+
+Landing / Explore
+
+Route: /
+
+Access: Guest all
+
+Shows: job feed, trending skills, create job CTA
+
+Job Listing (public)
+
+Route: /jobs/:jobId
+
+Access: Guest view; actions vary by role
+
+Data: job metadata, escrow amount, milestones, deadline, status, history (on-chain events)
+
+Create Job (Client)
+
+Route: /jobs/create
+
+Access: Wallet connected + account verified as Client (if you require profile)
+
+Action: Form → deposit funds (calls createJobAndFund() on ASC)
+
+My Jobs (Client dashboard)
+
+Route: /dashboard/client
+
+Access: Wallet address equals clientAddress OR owner role
+
+Shows: Active jobs, pending approvals, payouts, refunds
+
+My Work (Freelancer dashboard)
+
+Route: /dashboard/freelancer
+
+Access: Wallet address matches freelancer or has freelancerProfile
+
+Shows: Accepted jobs, submissions, earnings
+
+Submit Work
+
+Route: /jobs/:jobId/submit
+
+Access: Only freelancer who accepted job and job.status == InProgress
+
+Action: Upload (IPFS) → call submitWork(jobId, submissionCID)
+
+Voting / Dispute Center (DAO members)
+
+Route: /disputes and /disputes/:disputeId
+
+Access: DAO token holders (frontend checks stake & wallet)
+
+Action: Vote, see audit log
+
+Escrow History / Receipts
+
+Route: /wallet/transactions
+
+Access: Wallet connected; read events for that address
+
+Profile / Settings
+
+Route: /profile/:address and /settings
+
+Access: public or owner for edit
+
+Contains KYC flag if needed (optional)
+
+Admin / Monitoring (optional)
+
+Route: /admin
+
+Access: off-chain admin auth, but avoid privileged on-chain logic
+
+Route guard example (pseudo):
+
+On route enter: if (!walletConnected) redirect('/');
+
+if (route == '/jobs/:jobId/submit' && wallet.address != job.freelancer) denyAccess();
+
+For DAO pages: if (getStake(wallet.address) == 0) denyAccess();
+
+Smart contract (ASC) design — functions, storage, events
+
+We'll write a clear ASC interface and explain flows. Use Massa contract naming conventions (adapt to actual Rust/AssemblyScript SDK you choose).
+
+Core data structures
+Job {
+  id: JobId,
+  client: Address,
+  freelancer: Option<Address>,
+  title: String,
+  descriptionCID: String,      // IPFS metadata CID
+  totalPayment: u128,
+  milestones: Vec<Milestone>,
+  status: JobStatus,           // Posted | Accepted | InProgress | Submitted | Voting | Completed | Disputed | Cancelled | Refunded
+  createdAt: u64,              // block timestamp
+  deadline: u64,               // timestamp
+  votingEnd: Option<u64>,      // timestamp
+  escrowBalance: u128,
+  disputeId: Option<DisputeId>,
+}
+Milestone {
+  id: u32,
+  amount: u128,
+  dueDate: u64,
+  status: MilestoneStatus
+}
+Dispute {
+  id: DisputeId,
+  jobId: JobId,
+  reasonCID: String,
+  votesFor: u128,     // weighted by stake
+  votesAgainst: u128,
+  createdAt: u64,
+  votingEndAt: u64
+}
+
+Storage mappings
+
+jobs: map<JobId, Job>
+
+userProfiles: map<Address, Profile>
+
+stakes: map<Address, u128> (for DAO voting)
+
+escrowBalances: map<JobId, u128> // mirrors job.escrowBalance
+
+Events (on-chain)
+
+JobCreated(jobId, client, totalPayment)
+
+JobAccepted(jobId, freelancer)
+
+MilestoneSubmitted(jobId, milestoneId, submissionCID)
+
+VotingStarted(jobId, votingEndAt)
+
+VoteCast(disputeId, voter, weight, side)
+
+JobCompleted(jobId, freelancer, amountReleased)
+
+RefundIssued(jobId, client, amount)
+
+DisputeCreated(jobId, disputeId, reasonCID)
+
+Public contract functions
+
+createJob(descriptionCID, milestones[], deadline) payable
+
+Called by client, must attach totalPayment in call. Creates job, stores funds in escrowBalance. Emits JobCreated.
+
+cancelJob(jobId)
+
+Client can cancel if no freelancer accepted. Refunds escrow.
+
+acceptJob(jobId)
+
+Freelancer accepts. Sets freelancer, status = Accepted or InProgress.
+
+submitWork(jobId, submissionCID)
+
+Only freelancer assigned can call. Sets status = Submitted, stores CID, triggers startVoting(jobId) via deferred call.
+
+startVoting(jobId) (internal)
+
+Sets status = Voting, sets votingEnd = now + VOTING_PERIOD, schedules deferred call resolveVoting(jobId) at votingEnd.
+
+vote(disputeId, side)
+
+DAO members vote; weight is based on stakes mapping (on-chain token stake).
+
+resolveVoting(jobId) (internal, deferred-call)
+
+If votesFor > votesAgainst → releaseFunds(jobId) else refundClient(jobId) or route to arbitration.
+
+releaseFunds(jobId) (internal)
+
+Transfer escrowBalance to freelancer (atomic on chain), set status = Completed.
+
+refundClient(jobId) (internal)
+
+Transfer funds back to client.
+
+raiseDispute(jobId, reasonCID)
+
+Creates dispute and triggers extended DAO vote period.
+
+stakeTokens(voter, amount) / unstakeTokens()
+
+For DAO voting weight
+
+whitelistLongDeferred(contractAddr) (optional)
+
+Admin to whitelist for longer deferred durations if needed (avoid if you can).
+
+Note: All transfer operations must use safe transfer patterns and emit events.
+
+Key on-chain flows (detailed, exact steps)
+1) Create Job & Fund Escrow
+
+Client signs createJob(...) and includes totalPayment tokens (MAS or stable token like USDC if available).
+
+ASC stores job struct and sets escrowBalances[jobId] = totalPayment. Emit JobCreated.
+
+Frontend shows job live.
+
+2) Accept Job
+
+Freelancer calls acceptJob(jobId) (ASC checks job.status == Posted).
+
+ASC sets job.freelancer = msg.sender, status = InProgress, createdAt updated. Emit JobAccepted.
+
+3) Submit Work → Start Voting (AUTOMATIC via deferred call)
+
+Freelancer uploads deliverable to IPFS and calls submitWork(jobId, submissionCID).
+
+ASC stores submissionCID and sets status = Submitted.
+
+ASC calls startVoting(jobId) which:
+
+sets status = Voting
+
+sets votingEnd = now + VOTING_PERIOD (e.g., 3 days)
+
+schedules deferred call resolveVoting(jobId) at votingEnd. (Massa deferred calls guarantee execution.)
+
+4) Vote & Resolve (AUTOMATIC)
+
+DAO members call vote(disputeId, side). Votes are weighted by stakes.
+
+At votingEnd, MASSA runtime triggers resolveVoting(jobId) (deferred call).
+
+resolveVoting logic:
+
+if votesFor >= votesThreshold: call releaseFunds(jobId) (transfer to freelancer)
+
+else if votesAgainst >= threshold: call refundClient(jobId)
+
+else if low turnout → follow preconfigured fallback (e.g., split funds, or auto-refund/auto-release based on client setting).
+
+5) Disputes / Arbitration
+
+If client or freelancer raises a dispute before/after voting, raiseDispute creates a dispute and extends voting window, or opens special arbitration flow (multisig of trusted arbitrators or higher-weight DAO vote).
+
+6) Edge cases & timeouts (AUTOMATIC)
+
+If freelancer accepts but doesn’t submit before deadline: client calls claimTimeout(jobId) or ASC auto-refunds after a deferred call set at deadline + gracePeriod.
+
+If client funded but job not accepted in X time: either auto-refund or auto-bounty to public.
+
+How we use Massa features (concrete)
+
+Autonomous Smart Contracts (ASC): entire escrow, voting, staking, payments logic lives in ASC; no external keepers.
+
+Deferred Calls: schedule resolveVoting(jobId) at votingEnd; schedule autorefunds/releases at deadlines; schedule recurring payouts if milestones are time-based.
+
+DeWeb: host the frontend on DeWeb so UI is unstoppable — the judges love DeWeb usage. Use DeWeb SDK to upload compiled frontend after static build.
+
+On-chain storage: store job metadata pointers (IPFS CIDs) on chain, not full content.
+
+Bearby wallet: wallet integration for authentication & transaction signing.
+
+Frontend – API & actions (client↔ASC interaction)
+
+All blockchain calls are direct calls to ASC. Provide an off-chain relay (indexer) for faster UI querying of events.
+
+Public REST-like endpoints (off-chain indexer server)
+
+GET /api/jobs → query indexed jobs (for UI search & pagination)
+
+GET /api/jobs/:jobId/events → list of on-chain events
+
+POST /api/upload → uploads to Pinata/IPFS (server helps pin; store CID on chain)
+
+GET /api/profile/:address → profile metadata (CID resolved)
+
+These are optional; the frontend can directly call chain for writes and indexer for reads (to avoid scanning).
+
+UI actions (mapping to ASC calls)
+
+Create job → createJob() (attach funds)
+
+Accept job → acceptJob()
+
+Submit work → submitWork(jobId, CID)
+
+Vote → vote(disputeId, side)
+
+Raise dispute → raiseDispute(jobId, CID)
+
+Withdraw earnings → releaseFunds(jobId) will transfer automatically; freelancer calls withdraw() to pull into wallet if contract uses pull pattern
+
+Stake tokens for voting → stakeTokens()
+
+UI wireframe & UX for each page (what user sees & buttons)
+
+I’ll summarize key screens & exact UI actions.
+
+Landing / Explore
+
+Job cards: title, pay, deadline, tags, status badge.
+
+Filters (skill, pay range, status). CTA: Create Job.
+
+Job Page (/jobs/:jobId)
+
+Top: Title, pay (escrow), client, postedAt, status, deadline.
+
+Middle: Description (from IPFS), attachments (CID), milestones list, audit timeline (events).
+
+Right: Action card:
+
+If guest: Connect Wallet to Apply
+
+If freelancer: Accept Job (if open) or Submit Work (if accepted)
+
+If client: Cancel Job (if no freelancer), Open Dispute (if submitted), Release Early (optional)
+
+Create Job (/jobs/create)
+
+Form: title, description upload (Pinata), milestones (amount + date), payment token selector, deadline, auto-fallback rules (autoReleaseAfter X days?).
+
+Button: Create & Fund (opens Bearby modal to sign & send funds)
+
+Client Dashboard (/dashboard/client)
+
+Tabs: Active, Pending Approvals, Completed, Disputes.
+
+Each item shows on-chain status & quick actions: cancel, extend deadline, open dispute.
+
+Freelancer Dashboard (/dashboard/freelancer)
+
+Tabs: Offers, In Progress, Submissions, Earnings. Withdraw button for earned funds if contract uses pull model.
+
+Dispute Center (/disputes)
+
+List of dispute items for DAO voters. Each dispute shows job metadata, submission CID, evidence, vote button. Voting power shown and stake button.
+
+Profile (/profile/:address)
+
+About, past jobs, ratings (on-chain ratings), reputation score (optional on-chain metric).
+
+Security & UX choices (must haves)
+
+Pull over push transfers: to avoid reentrancy and allow gas payers, use pull pattern: releaseFunds moves escrowBalance into withdrawableBalance[freelancer], freelancer calls withdraw(). Or do push if safe and MAS supports safe transfers, but pull is safer.
+
+On-chain receipts: every action emits events for transparency. UI indexes events.
+
+Limits: max escrow per job, max gas limits for deferred calls.
+
+Sanity checks: validate milestone sums equals totalPayment.
+
+IPFS content validation: store metadata hash on chain; verify in UI.
+
+Rate limiting: per-account job postings to avoid spam (on-chain or via frontend gating).
+
+Slashing & stake: DAO stakes can be slashed for malicious votes (optional).
+
+Avoid privileged keys: keep admin off-chain; minimal on-chain privileged calls.
+
+DeWeb deployment (brief steps)
+
+Build frontend: npm run build for React.
+
+Upload static assets to DeWeb using Massa tooling (or deweb CLI): create DeWeb bundle and push. Save resulting DeWeb link/identifier.
+
+Register front-end CID in contract (optional) with setFrontendCID(CID) so job page references can link to on-chain hosted UI.
+
+Provide demo link in README and in submission.
+
+Testing locally (quick plan)
+
+Use Massa local buildnet or testnet.
+
+Unit tests for ASC using Massa SDK test harness.
+
+Integration tests: simulate client creates job, freelancer accepts, submits, DAO votes, deferred call executes and state transitions.
+
+UI tests: wallet integration, file upload flow.
+
+Data model / DB (off-chain indexing)
+
+Use an indexer process (serverless function or small Node service) that watches on-chain events and builds fast read models for the frontend (search, filters, pagination). This is optional but recommended for UX.
+
+README + Pitch video script (short)
+
+README contents
+
+One-liner + demo link + screenshot
+
+Tech stack: Massa ASC (Rust/TS), DeWeb frontend (React + Tailwind), Bearby wallet, IPFS (Pinata)
+
+How it works (short flow with bullets)
+
+Local dev & testnet steps
+
+Contract address + DeWeb link
+
+Security notes
+
+Demo video script (max 3 minutes)
+
+0:00–0:20 — Intro: what TaskHarbor solves.
+
+0:20–0:50 — Client creates a job & funds escrow (show UI + Bearby confirmation).
+
+0:50–1:20 — Freelancer accepts and submits deliverable (upload CID).
+
+1:20–1:50 — Show DAO voting UI & vote.
+
+1:50–2:10 — Show automatic release executed (on-chain event) and freelancer withdraw.
+
+2:10–2:40 — Show dispute flow & admin/DAO resolution. Close with “Hosted on DeWeb; fully autonomous.”
+
+MVP feature list (what to build first)
+
+MVP (ship in 3–5 days)
+
+Create job & fund escrow (ASC + frontend)
+
+Accept job & submit work flow
+
+Voting window & simple DAO (stake & vote)
+
+Deferred calls for automatic resolve (deferred resolveVoting)
+
+Basic profile pages + IPFS upload via Pinata
+
+DeWeb deploy + Bearby login
+
+Stretch (after MVP)
+
+Milestones & partial releases
+
+Reputation system & ratings
+
+Arbitration multisig & slashing
+
+Mobile responsive design + mobile wallet flows
+
+Advanced DAO weighting & gas optimization
+
+Support for multiple tokens (USDC + MAS)
+
+Example contract function signatures (pseudo)
+fn create_job(client: Address, description_cid: String, total_payment: u128, milestones: Vec<Milestone>, deadline: u64) payable;
+fn accept_job(job_id: u64) -> bool;
+fn submit_work(job_id: u64, submission_cid: String);
+fn vote(dispute_id: u64, side: bool);
+fn resolve_voting(job_id: u64) [called by deferred call];
+fn release_funds(job_id: u64);
+fn refund_client(job_id: u64);
+fn withdraw() -> balance;
+
+Edge-case policies you must decide (recommended defaults)
+
+Default voting threshold: 50% weighted yes for auto-release; else refund.
+
+No-vote fallback: if no quorum by votingEnd, auto-refund client (or split 50/50 if configured). Decide one and document.
+
+Time limits: posting expiry (e.g., if no accept in 30 days, auto-refund).
+
+Staking requirement for voting: minimal stake to prevent spam voting.
+
+How TaskHarbor wins judge criteria
+
+Technical excellence: full ASC + deferred calls; DeWeb hosting; on-chain vote weighting.
+
+Innovation: first autonomous escrow + job flow all on-chain.
+
+Usefulness: solves trust problem freelancers & clients face.
+
+UX: clean dashboards, event timeline, easy wallet flows.
+
+Autonomy & Decentralization: no keepers — all payments & timeouts enforced on chain.
+
+Final checklist to submit
+
+Repo with contracts/, frontend/, tests, README
+
+DeWeb link & deployed contract address in submission
