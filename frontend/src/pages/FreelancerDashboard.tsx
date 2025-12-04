@@ -14,11 +14,16 @@ interface UiJob {
   paymentMas: string;
   deadline: string;
   client: string;
+  // Whether this job is already associated with the freelancer (accepted/in progress/etc.)
+  isMine?: boolean;
 }
 
 const FreelancerDashboard: React.FC = () => {
   const { account, isConnected, client, wallet, userProfile } = useWallet();
-  const [jobs, setJobs] = useState<UiJob[]>([]);
+  // Jobs that are already linked to this freelancer (via JobContract.getFreelancerJobs)
+  const [myJobs, setMyJobs] = useState<UiJob[]>([]);
+  // Publicly posted jobs that any freelancer can apply for
+  const [offerJobs, setOfferJobs] = useState<UiJob[]>([]);
   const [earnings, setEarnings] = useState({ total: '0', withdrawable: '0' });
   const [activeTab, setActiveTab] = useState<'offers' | 'inprogress' | 'submissions' | 'earnings'>('offers');
   const [loading, setLoading] = useState(false);
@@ -39,23 +44,41 @@ const FreelancerDashboard: React.FC = () => {
         const service = createContractService(client);
         if (!service) throw new Error('Wallet not connected');
 
-        const [ids, withdrawable] = await Promise.all([
+        const [freelancerJobIds, allJobIds, withdrawable] = await Promise.all([
           service.getFreelancerJobs(account.address),
+          service.getAllJobs(),
           service.getWithdrawableBalance(account.address),
         ]);
 
-        const jobsOnChain: OnChainJob[] = await Promise.all(ids.map((id) => service.getJob(id)));
+        const [freelancerJobsOnChain, allJobsOnChain]: [OnChainJob[], OnChainJob[]] = await Promise.all([
+          Promise.all(freelancerJobIds.map((id) => service.getJob(id))),
+          Promise.all(allJobIds.map((id) => service.getJob(id))),
+        ]);
 
-        const uiJobs: UiJob[] = jobsOnChain.map((job) => ({
+        const myUiJobs: UiJob[] = freelancerJobsOnChain.map((job) => ({
           id: job.id.toString(),
           title: job.title,
           status: job.status,
           paymentMas: (Number(job.totalPayment) / 1e9).toString(),
           deadline: new Date(Number(job.deadline)).toISOString(),
           client: job.client,
+          isMine: true,
         }));
 
-        setJobs(uiJobs);
+        // Offers are all jobs that are still Posted and not yet assigned to a freelancer.
+        const offerUiJobs: UiJob[] = allJobsOnChain
+          .filter((job) => job.status === 'Posted' && !job.freelancer)
+          .map((job) => ({
+            id: job.id.toString(),
+            title: job.title,
+            status: job.status,
+            paymentMas: (Number(job.totalPayment) / 1e9).toString(),
+            deadline: new Date(Number(job.deadline)).toISOString(),
+            client: job.client,
+          }));
+
+        setMyJobs(myUiJobs);
+        setOfferJobs(offerUiJobs);
 
         const withdrawableMas = (Number(withdrawable) / 1e9).toString();
         setEarnings({
@@ -65,7 +88,8 @@ const FreelancerDashboard: React.FC = () => {
       } catch (e) {
         console.error(e);
         setError(e instanceof Error ? e.message : 'Failed to load freelancer data');
-        setJobs([]);
+        setMyJobs([]);
+        setOfferJobs([]);
       } finally {
         setLoading(false);
       }
@@ -94,23 +118,23 @@ const FreelancerDashboard: React.FC = () => {
   }
 
   const stats = {
-    offers: jobs.filter((j) => j.status === 'Posted').length,
-    inprogress: jobs.filter((j) => j.status === 'Accepted' || j.status === 'InProgress').length,
-    submissions: jobs.filter((j) => j.status === 'Submitted' || j.status === 'Voting').length,
+    offers: offerJobs.length,
+    inprogress: myJobs.filter((j) => j.status === 'Accepted' || j.status === 'InProgress').length,
+    submissions: myJobs.filter((j) => j.status === 'Submitted' || j.status === 'Voting').length,
   };
 
-  const filteredJobs = jobs.filter((job) => {
+  const filteredJobs: UiJob[] = (() => {
     switch (activeTab) {
       case 'offers':
-        return job.status === 'Posted';
+        return offerJobs;
       case 'inprogress':
-        return job.status === 'Accepted' || job.status === 'InProgress';
+        return myJobs.filter((job) => job.status === 'Accepted' || job.status === 'InProgress');
       case 'submissions':
-        return job.status === 'Submitted' || job.status === 'Voting';
+        return myJobs.filter((job) => job.status === 'Submitted' || job.status === 'Voting');
       default:
-        return true;
+        return myJobs;
     }
-  });
+  })();
 
   const handleWithdraw = async () => {
     if (!wallet || !client || !account) return;

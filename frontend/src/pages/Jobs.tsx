@@ -55,7 +55,8 @@ const Jobs: React.FC = () => {
         const uiJobs: UiJob[] = jobsRaw.map((job) => ({
           id: job.id.toString(),
           title: job.title,
-          description: job.descriptionCID || 'On-chain job description (IPFS CID: ' + job.descriptionCID + ')',
+          // We store the full description string directly in descriptionCID on-chain.
+          description: job.descriptionCID,
           client: job.client,
           totalPaymentMas: (Number(job.totalPayment) / 1e9).toString(),
           deadline: new Date(Number(job.deadline)).toISOString(),

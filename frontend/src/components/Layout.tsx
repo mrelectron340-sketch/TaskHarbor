@@ -8,6 +8,12 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isConnected, account, disconnectWallet, userProfile } = useWallet();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
+  const [showSplash, setShowSplash] = React.useState(true);
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => setShowSplash(false), 1400);
+    return () => clearTimeout(timer);
+  }, []);
 
   const activeRole = userProfile?.role ?? 'guest';
   const isClient = activeRole === 'client';
@@ -37,7 +43,52 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navItems = [...baseNav, ...(isConnected ? roleNav : [])];
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col relative">
+      {/* Splash screen */}
+      {showSplash && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+            className="flex flex-col items-center space-y-6"
+          >
+            <motion.div
+              animate={{ y: [0, -6, 0] }}
+              transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+              className="w-20 h-20 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shadow-2xl shadow-primary-900/50"
+            >
+              <Briefcase className="w-10 h-10 text-white" />
+            </motion.div>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.3, duration: 0.5 }}
+              className="text-center"
+            >
+              <div className="text-3xl md:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-primary-200 via-primary-400 to-primary-200 bg-clip-text text-transparent">
+                TaskHarbor
+              </div>
+              <p className="mt-2 text-sm md:text-base text-slate-400">
+                Launching your decentralized job marketplace...
+              </p>
+            </motion.div>
+            <motion.div
+              initial={{ scaleX: 0 }}
+              animate={{ scaleX: 1 }}
+              transition={{ duration: 1, ease: 'easeOut' }}
+              className="w-40 h-1.5 rounded-full overflow-hidden bg-slate-800"
+            >
+              <motion.div
+                animate={{ x: ['-60%', '120%'] }}
+                transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                className="w-1/2 h-full bg-gradient-to-r from-primary-400 via-primary-500 to-primary-300"
+              />
+            </motion.div>
+          </motion.div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-700 sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4">

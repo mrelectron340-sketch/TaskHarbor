@@ -49,19 +49,6 @@ const JobDetail: React.FC = () => {
 
       const onChain: OnChainJob = await service.getJob(BigInt(jobId));
 
-      // Try to fetch description from IPFS if CID is present
-      let descriptionText = '';
-      if (onChain.descriptionCID) {
-        try {
-          const res = await fetch(`${CONFIG.IPFS_GATEWAY}${onChain.descriptionCID}`);
-          if (res.ok) {
-            descriptionText = await res.text();
-          }
-        } catch {
-          // Ignore IPFS failures, fall back to CID display
-        }
-      }
-
       const ui: UiJob = {
         id: onChain.id.toString(),
         title: onChain.title,
@@ -71,8 +58,9 @@ const JobDetail: React.FC = () => {
         deadline: new Date(Number(onChain.deadline)).toISOString(),
         status: onChain.status,
         createdAt: new Date(Number(onChain.createdAt)).toISOString(),
-        description: descriptionText || `Job description stored on IPFS (CID: ${onChain.descriptionCID})`,
-        descriptionCID: onChain.descriptionCID,
+        // We store the full description string directly in descriptionCID on-chain.
+        description: onChain.descriptionCID,
+        descriptionCID: '',
         submissionCID: onChain.submissionCID,
       };
 

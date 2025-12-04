@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Briefcase, Calendar, DollarSign, X, Plus, Loader, Upload } from 'lucide-react';
+import { Briefcase, Calendar, DollarSign, X, Plus, Loader } from 'lucide-react';
 import { useWallet } from '../context/WalletContext';
 import { createContractService } from '../utils/contracts';
 import CONFIG from '../config';
@@ -22,7 +22,6 @@ const CreateJob: React.FC = () => {
     description: '',
     totalPayment: '',
     deadline: '',
-    descriptionCID: '',
   });
   const [milestones, setMilestones] = useState<Milestone[]>([]);
 
@@ -46,19 +45,17 @@ const CreateJob: React.FC = () => {
     );
   }
 
-  const handleUploadToIPFS = async () => {
-    // We do not fake CIDs here. Use any IPFS pinning service (decentralized storage),
-    // upload the description text there, and paste the CID manually into the Description CID field.
-    alert(
-      'Upload the description text to IPFS with your preferred pinning service (no centralized DB), then paste the CID into the "Description CID" field.',
-    );
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!formData.descriptionCID) {
-      alert('Please upload description to IPFS and paste the CID before creating the job.');
+
+    if (!formData.title || !formData.description || !formData.totalPayment || !formData.deadline) {
+      alert('Please fill in all required fields.');
+      return;
+    }
+
+    const deadlineTimestamp = new Date(formData.deadline).getTime();
+    if (Number.isNaN(deadlineTimestamp)) {
+      alert('Please provide a valid deadline date.');
       return;
     }
 
@@ -69,18 +66,21 @@ const CreateJob: React.FC = () => {
         throw new Error('Contract addresses are not fully configured. Set JOB and ESCROW in config.ts after deploying.');
       }
 
-      const contractService = createContractService(client)!;
-      const deadlineTimestamp = new Date(formData.deadline).getTime();
-      
-      // 1) Create job metadata on-chain
+      const contractService = createContractService(client);
+      if (!contractService) {
+        throw new Error('Wallet not connected.');
+      }
+
+      // We store the full description string directly on-chain using the descriptionCID field.
+      // This avoids forcing IPFS usage while keeping the contract interface unchanged.
       await contractService.createJob(
         formData.title,
-        formData.descriptionCID,
+        formData.description,
         formData.totalPayment,
-        deadlineTimestamp
+        deadlineTimestamp,
       );
 
-      // 2) Fetch client's jobs and fund escrow for the latest one
+      // Fetch client's jobs and fund escrow for the latest one
       const clientJobs = await contractService.getClientJobs(account.address);
       if (clientJobs.length === 0) {
         throw new Error('Failed to locate newly created job to fund escrow.');
@@ -88,8 +88,8 @@ const CreateJob: React.FC = () => {
       const newJobId = clientJobs[clientJobs.length - 1];
 
       await contractService.depositEscrow(newJobId, formData.totalPayment);
-      
-      alert('Job created successfully!');
+
+      alert('Job created and escrow funded successfully!');
       navigate('/dashboard/client');
     } catch (error) {
       console.error('Failed to create job:', error);
@@ -117,7 +117,7 @@ const CreateJob: React.FC = () => {
 
   const updateMilestone = (id: string, field: keyof Milestone, value: string) => {
     setMilestones(
-      milestones.map((m) => (m.id === id ? { ...m, [field]: value } : m))
+      milestones.map((m) => (m.id === id ? { ...m, [field]: value } : m)),
     );
   };
 
@@ -157,20 +157,6 @@ const CreateJob: React.FC = () => {
             rows={6}
             className="input-field"
           />
-          <div className="mt-2 flex items-center justify-between">
-            <p className="text-sm text-slate-400">
-              {formData.descriptionCID ? `IPFS CID: ${formData.descriptionCID}` : 'Upload to IPFS to store on-chain'}
-            </p>
-            <button
-              type="button"
-              onClick={handleUploadToIPFS}
-              disabled={!formData.description}
-              className="btn-secondary text-sm py-2 px-4 flex items-center space-x-2 disabled:opacity-50"
-            >
-              <Upload className="w-4 h-4" />
-              <span>Upload to IPFS</span>
-            </button>
-          </div>
         </div>
 
         <div className="grid md:grid-cols-2 gap-4">
@@ -223,10 +209,10 @@ const CreateJob: React.FC = () => {
 
           {milestones.length > 0 && (
             <div className="space-y-4">
-              {milestones.map((milestone) => (
+              {milestones.map((milestone, index) => (
                 <div key={milestone.id} className="bg-slate-800/50 rounded-lg p-4 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold">Milestone {milestones.indexOf(milestone) + 1}</span>
+                    <span className="text-sm font-semibold">Milestone {index + 1}</span>
                     <button
                       type="button"
                       onClick={() => removeMilestone(milestone.id)}
@@ -265,8 +251,8 @@ const CreateJob: React.FC = () => {
 
         <div className="bg-primary-600/10 border border-primary-500/50 rounded-lg p-4">
           <p className="text-sm text-slate-300">
-            <strong>Note:</strong> You will need to fund the escrow with {formData.totalPayment || '0'} MAS when creating this job.
-            Funds will be locked until the job is completed and approved.
+            <strong>Note:</strong> You will need to fund the escrow with {formData.totalPayment || '0'} MAS when creating
+            this job. Funds will be locked until the job is completed and approved.
           </p>
         </div>
 
@@ -280,7 +266,7 @@ const CreateJob: React.FC = () => {
           </button>
           <button
             type="submit"
-            disabled={loading || !formData.descriptionCID}
+            disabled={loading}
             className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
           >
             {loading ? (
